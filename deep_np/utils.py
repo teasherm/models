@@ -6,6 +6,10 @@ def softmax(logits):
   return (eX.T / eX.sum(axis=1)).T
 
 
+def sigmoid(logits):
+  return 1.0 / (1.0 + np.exp(-logits))
+
+
 def exp_running_avg(running, new, gamma=.9):
   return gamma * running + (1. - gamma) * new
 
