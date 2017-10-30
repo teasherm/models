@@ -325,3 +325,126 @@ class RecurrentNetwork(NeuralNetwork):
       X = idx
 
     return ''.join(chars)
+
+
+class LSTM(RecurrentNetwork):
+  def __init__(self, vocab_size, char2idx, idx2char, hidden_dim=128):
+    self.vocab_size = vocab_size
+    self.char2idx = char2idx
+    self.idx2char = idx2char
+    self.hidden_dim = hidden_dim
+    Wf, bf = _init_fc_weights(vocab_size + hidden_dim, hidden_dim)
+    Wi, bi = _init_fc_weights(vocab_size + hidden_dim, hidden_dim)
+    Wc, bc = _init_fc_weights(vocab_size + hidden_dim, hidden_dim)
+    Wo, bo = _init_fc_weights(vocab_size + hidden_dim, hidden_dim)
+    Wy, by = _init_fc_weights(hidden_dim, vocab_size)
+    self.model = dict(
+        Wf=Wf, bf=bf, Wi=Wi, bi=bi, Wc=Wc, bc=bc, Wo=Wo, bo=bo, Wy=Wy, by=by)
+
+  def init_hidden_state(self):
+    return (np.zeros((1, self.hidden_dim)), np.zeros((1, self.hidden_dim)))
+
+  def forward(self, X, state, train=True):
+    h_old, c_old = state
+
+    X_one_hot = np.zeros(self.vocab_size)
+    X_one_hot[X] = 1.
+    X_one_hot = X_one_hot.reshape(1, -1)
+
+    X = np.column_stack((h_old, X_one_hot))
+
+    hf, hf_cache = layers.fc_forward(X, self.model["Wf"], self.model["bf"])
+    hf, hf_sigm_cache = layers.sigmoid_forward(hf)
+
+    hi, hi_cache = layers.fc_forward(X, self.model["Wi"], self.model["bi"])
+    hi, hi_sigm_cache = layers.sigmoid_forward(hi)
+
+    ho, ho_cache = layers.fc_forward(X, self.model["Wo"], self.model["bo"])
+    ho, ho_sigm_cache = layers.sigmoid_forward(ho)
+
+    hc, hc_cache = layers.fc_forward(X, self.model["Wc"], self.model["bc"])
+    hc, hc_tanh_cache = layers.tanh_forward(hc)
+
+    c = hf * c_old + hi * hc
+    c, c_tanh_cache = layers.tanh_forward(c)
+
+    h = ho * c
+
+    y, y_cache = layers.fc_forward(h, self.model["Wy"], self.model["by"])
+
+    cache = (X, hf, hi, ho, hc, hf_cache, hf_sigm_cache, hi_cache,
+             hi_sigm_cache, ho_cache, ho_sigm_cache, hc_cache, hc_tanh_cache,
+             c_old, c, c_tanh_cache, y_cache)
+
+    if not train:
+      y = utils.softmax(y)
+
+    return y, (h, c), cache
+
+  def backward(self, logits, y_train, d_next, cache):
+    X, hf, hi, ho, hc, hf_cache, hf_sigm_cache, hi_cache, hi_sigm_cache, ho_cache, \
+        ho_sigm_cache, hc_cache, hc_tanh_cache, c_old, c, c_tanh_cache, y_cache = cache
+    dh_next, dc_next = d_next
+
+    dy = losses.dcross_entropy(logits, y_train)
+
+    dh, dWy, dby = layers.fc_backward(dy, y_cache)
+    dh += dh_next
+
+    dho = c * dh
+    dho = layers.sigmoid_backward(dho, ho_sigm_cache)
+
+    dc = ho * dh
+    dc = layers.tanh_backward(dc, c_tanh_cache)
+    dc = dc + dc_next
+
+    dhf = c_old * dc
+    dhf = layers.sigmoid_backward(dhf, hf_sigm_cache)
+
+    dhi = hc * dc
+    dhi = layers.sigmoid_backward(dhi, hi_sigm_cache)
+
+    dhc = hi * dc
+    dhc = layers.tanh_backward(dhc, hc_tanh_cache)
+
+    dXo, dWo, dbo = layers.fc_backward(dho, ho_cache)
+    dXc, dWc, dbc = layers.fc_backward(dhc, hc_cache)
+    dXi, dWi, dbi = layers.fc_backward(dhi, hi_cache)
+    dXf, dWf, dbf = layers.fc_backward(dhf, hf_cache)
+
+    dX = dXo + dXc + dXi + dXf
+    dh_next = dX[:, :self.hidden_dim]
+    dc_next = hf * dc
+
+    grad = dict(Wf=dWf, Wi=dWi, Wc=dWc, Wo=dWo, Wy=dWy, bf=dbf, bi=dbi, bc=dbc, bo=dbo, by=dby)
+
+    return grad, (dh_next, dc_next)
+
+  def train_step(self, X_batch, y_batch, state):
+    logits_batch = []
+    caches = []
+    loss = 0.
+
+    for x, y_true in zip(X_batch, y_batch):
+      logits, state, cache = self.forward(x, state, train=True)
+      loss += losses.cross_entropy(logits, y_true)
+      logits_batch.append(logits)
+      caches.append(cache)
+
+    loss /= X_batch.shape[0]
+
+    # backward
+    d_next = self.init_hidden_state()
+
+    grads = {k: np.zeros_like(v) for k, v in self.model.items()}
+
+    for y_pred, y_true, cache in reversed(list(zip(logits_batch, y_batch, caches))):
+      grad, d_next = self.backward(y_pred, y_true, d_next, cache)
+
+      for k in grads.keys():
+        grads[k] += grad[k]
+
+    for k, v in grads.items():
+      grads[k] = np.clip(v, -5., 5.)
+
+    return grads, loss, state

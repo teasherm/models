@@ -60,6 +60,15 @@ def maxpool_backward(dout, cache):
   return _pool_backward(dout, dmaxpool, cache)
 
 
+def sigmoid_forward(X):
+  out = utils.sigmoid(X)
+  return out, dict(out=out)
+
+
+def sigmoid_backward(dout, cache):
+  return cache["out"] * (1 - cache["out"]) * dout
+
+
 def tanh_forward(X):
   out = np.tanh(X)
   return out, dict(out=out)

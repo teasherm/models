@@ -38,7 +38,7 @@ def train_cnn(batch_size=256, epochs=50, print_every=10):
 def train_rnn(batch_size=256, epochs=50, print_every=100):
   X, y, char2idx, idx2char = load_shakespeare()
   batches_per_epoch = get_batches_per_epoch(batch_size, X.size)
-  nn = nets.RecurrentNetwork(len(char2idx), char2idx, idx2char)
+  nn = nets.LSTM(len(char2idx), char2idx, idx2char)
   optimizer = optimizers.Adam(nn)
   for e in tqdm(range(epochs)):
     hidden_state = nn.init_hidden_state()
@@ -49,8 +49,9 @@ def train_rnn(batch_size=256, epochs=50, print_every=100):
                                     hidden_state)
       optimizer.optimize(nn, grad, t)
       if t % print_every == 0:
+        print("Sample from language model, Iter-{}:".format(t))
         print(nn.sample(X[0], hidden_state, 100))
 
 
 if __name__ == "__main__":
-  reinforcement.train_policy_gradient()
+  train_rnn()
