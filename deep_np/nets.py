@@ -44,7 +44,8 @@ class NeuralNetwork(object):
     raise NotImplementedError()
 
 
-class FeedForwardNetwork(NeuralNetwork):
+# Network for pong policy gradient
+class PongNetwork(NeuralNetwork):
   def __init__(self, input_dim, hidden_dim=128, n_cls=3):
     W1, b1 = _init_fc_weights(input_dim, hidden_dim)
     W2, b2 = _init_fc_weights(hidden_dim, n_cls)
@@ -65,9 +66,108 @@ class FeedForwardNetwork(NeuralNetwork):
 
     dX, dW1, db1 = layers.fc_backward(dh1, cache["h1"])
 
-    grad = dict(dW1=dW1, db1=db1, dW2=dW2, db2=db2)
+    grad = dict(W1=dW1, b1=db1, W2=dW2, b2=db2)
 
     return grad
+
+
+class FeedForwardNetwork(NeuralNetwork):
+  def __init__(self, in_dim=784, hidden_dim=128, p_dropout=0.7, n_cls=10):
+    self.p_dropout = p_dropout
+    W1, b1 = _init_fc_weights(in_dim, hidden_dim)
+    beta1 = np.ones((1, hidden_dim))
+    gamma1 = np.ones((1, hidden_dim))
+    W2, b2 = _init_fc_weights(hidden_dim, hidden_dim)
+    beta2 = np.ones((1, hidden_dim))
+    gamma2 = np.ones((1, hidden_dim))
+    W3, b3 = _init_fc_weights(hidden_dim, n_cls)
+    self.model = dict(
+        W1=W1,
+        b1=b1,
+        beta1=beta1,
+        gamma1=gamma1,
+        W2=W2,
+        b2=b2,
+        beta2=beta2,
+        gamma2=gamma2,
+        W3=W3,
+        b3=b3)
+    self.bn_caches = dict(
+        b1_mean=np.zeros((1, H)),
+        b1_var=np.zeros((1, H)),
+        b2_mean=np.zeros((1, H)),
+        b2_var=np.zeros((1, H)))
+
+  def forward(self, X, train=True):
+    gamma1, gamma2 = self.model["gamma1"], self.model["gamma2"]
+    beta1, beta2 = self.model["beta1"], self.model["beta2"]
+
+    u1, u2 = None, None
+    bn1_cache, bn2_cache = None, None
+
+    h1, h1_cache = layers.fc_forward(X, self.model["W1"], self.model["b1"])
+    bn1_cache = (self.bn_caches["bn1_mean"], self.bn_caches["bn1_var"])
+    h1, bn1_cache, run_mean, run_var = layers.bn_forward(
+        h1, gamma1, beta1, bn1_cache, train=train)
+    h1, nl1_cache = layers.relu_forward(h1)
+
+    self.bn_caches["bn1_mean"], self.bn1_mean["bn1_var"] = run_mean, run_var
+
+    if train:
+      h1, u1 = layers.dropout_forward(h1, self.p_dropout)
+
+    h2, h2_cache = layers.fc_forward(X, self.model["W2"], self.model["b2"])
+    bn2_cache = (self.bn_caches["bn2_mean"], self.bn_caches["bn2_var"])
+    h2, bn2_cache, run_mean, run_var = layers.bn_forward(
+        h2, gamma2, beta2, bn2_cache, train=train)
+    h2, nl2_cache = layers.relu_forward(h2)
+
+    self.bn_caches["bn2_mean"], self.bn2_mean["bn2_var"] = run_mean, run_var
+
+    if train:
+      h2, u2 = layers.dropout_forward(h2, self.p_dropout)
+
+    logits, logits_cache = layers.fc_forward(h2, self.model["W3"],
+                                             self.model["b3"])
+
+    return logits, dict(
+        X=X,
+        h1=h1_cache,
+        h2=h2_cache,
+        logits=logits_cache,
+        nl1=nl1_cache,
+        nl2=nl2_cache,
+        u1=u1,
+        u2=u2,
+        bn1=bn1_cache,
+        b2=bn2_cache)
+
+  def backward(self, logits, y_train, cache):
+    grad_y = loss.dcross_entropy(logits, y_train)
+
+    dh2, dW3, db3 = layers.fc_backward(grad_y, cache["logits"])
+    dh2 = layers.relu_backward(dh2, cache["nl2"])
+    dh2 = layers.dropout_backward(dh2, cache["u2"])
+    dh2, dgamma2, dbeta2 = layers.bn_backward(dh2, cache["bn2"])
+
+    dh1, dW2, db2 = layers.fc_backward(dh2, h2_cache)
+    dh1 = self.relu_backward(dh1, cache["nl1"])
+    dh1 = layers.dropout_backward(dh1, cache["u1"])
+    dh1, dgamma1, dbeta1 = layers.bn_backward(dh1, cache["bn1"])
+
+    _, dW1, db1 = layers.fc_backward(dh1, cache["h1"])
+
+    return dict(
+        W1=dW1,
+        b1=db1,
+        W2=dW2,
+        b2=db2,
+        W3=dW3,
+        b3=db3,
+        gamma1=dgamma1,
+        beta1=dbeta1,
+        gamma2=dgamma2,
+        beta2=dbeta2)
 
 
 class ConvolutionalNetwork(NeuralNetwork):

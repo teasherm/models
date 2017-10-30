@@ -80,6 +80,54 @@ def relu_backward(dout, cache):
   dX[cache["X"] <= 0] = 0
   return dX
 
+def dropout_forward(X, p_dropout):
+  u = np.random.binomial(1, p_dropout, size=X.shape) / p_dropout
+  out = X * u
+  return out, dict(u=u)
+
+
+def dropout_backward(dout, cache):
+  return dout * cache["u"]
+
+
+def bn_forward(X, gamma, beta, cache, momentum=.9, train=True):
+  running_mean, running_var = cache
+
+  if train:
+    mu = np.mean(X, axis=0)
+    var = np.var(X, axis=0)
+
+    X_norm = (X - mu) / np.sqrt(var + 1e-8)
+    out = gamma * X_norm + beta
+
+    cache = dict(X=X, X_norm=X_norm, mu=mu, var=var, gamma=gamma, beta=beta)
+
+    running_mean = utils.exp_running_avg(running_mean, mu, momentum)
+    running_var = utils.exp_running_avg(running_var, var, momentum)
+  else:
+    X_norm = (X - running_mean) / np/sqrt(running_var + 1e-8)
+    out = gamma * X_norm + beta
+    cache = None
+
+  return out, cache, running_mean, running_var
+
+
+def bn_backward(dout, cache):
+  N, D = cache["X"].shape
+
+  X_mu = cache["X"] = cache["mu"]
+  std_inv = 1. / np.sqrt(cache["var"] + 1e-8)
+
+  dX_norm = dout * cache["gamma"]
+  dvar = np.sum(dX_norm * X_mu, axis=0) * -.5 * std_inv**3
+  dmu = np.sum(dX_norm * -std_inv, axis=0) + dvar * np.mean(-2. * X_mu, axis=0)
+
+  dX = (dX_norm * std_inv) + (dvar * 2 * X_mu / N) + (dmu / N)
+  dgamma = np.sum(dout * cache["X_norm"], axis=0)
+  dbeta = np.sum(dout, axis=0)
+
+  return dX, dgamma, dbeta
+
 
 def fc_forward(X, W, b):
   out = X @ W + b
